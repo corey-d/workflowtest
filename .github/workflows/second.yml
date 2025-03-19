@@ -1,0 +1,15 @@
+name: Terraform
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - 'azure/**'
+jobs:
+  randumb:
+    uses: meltwater/github-actions-terraform/.github/workflows/main.yml@v1.2.3
+
