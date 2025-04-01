@@ -11,5 +11,5 @@ on:
       - 'azure/**'
 jobs:
   randumb:
-    uses: meltwater/github-actions-terraform/.github/workflows/main.yml@v1.2.3
+    uses: foo/bar.yml@v1.2.3
 
