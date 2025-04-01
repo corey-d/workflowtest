@@ -11,14 +11,9 @@ on:
       - 'azure/**'
 jobs:
   terraform:
-    uses: meltwater/github-actions-terraform/.github/workflows/main.yml@v5.8.1
+    uses: foo/main.yml@v5.8.1
     with:
-      runs-on: '["arc-fks-amd64"]'
-      assume_role_name: GitHubActionsOIDCRole
-      aws_account_id_dev: 849122192484
-      aws_account_id_prod: 624839716911
-      aws_account_id_root: 653197905853
-      aws_account_id_setup: directory_multiple
+      runs-on: '["arc-amd64"]'
       reduced_plan_output: true
     secrets: inherit
 
