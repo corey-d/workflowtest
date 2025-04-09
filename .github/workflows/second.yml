@@ -1,15 +1,13 @@
 name: Terraform
-
-on:
-  push:
-    branches:
-      - master
+true:
   pull_request:
     branches:
-      - master
+    - master
     paths-ignore:
-      - 'azure/**'
+    - azure/**
+  push:
+    branches:
+    - master
 jobs:
   randumb:
-    uses: foo/bar.yml@v1.2.3
-
+    uses: foo/bar.yml@v4.0
