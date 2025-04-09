@@ -1,19 +1,17 @@
 name: Terraform
-
-on:
-  push:
-    branches:
-      - master
+true:
   pull_request:
     branches:
-      - master
+    - master
     paths-ignore:
-      - 'azure/**'
+    - azure/**
+  push:
+    branches:
+    - master
 jobs:
   terraform:
-    uses: foo/bar.yml@v5.8.1
-    with:
-      runs-on: '["arc-amd64"]'
-      reduced_plan_output: true
     secrets: inherit
-
+    uses: foo/bar.yml@v4.0
+    with:
+      reduced_plan_output: true
+      runs-on: '["arc-amd64"]'
