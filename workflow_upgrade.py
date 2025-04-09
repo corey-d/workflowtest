@@ -1,9 +1,23 @@
+import base64
+import copy
 import github
 import os
+import re
 import sys
+import typing
 import yaml
 
-def get_client(token):
+# type aliases for PEP-484 Type Hints
+Branch = github.Branch
+ContentFile = github.ContentFile.ContentFile
+Github = github.Github
+Repository = github.Repository.Repository
+
+# "constants"
+BASE64 = 'base64'
+UTF8 = 'utf-8'
+
+def get_client(token: str) -> [Github, str]:
   try:
     auth = github.Auth.Token(token)
     client = github.Github(auth=auth)
@@ -11,35 +25,47 @@ def get_client(token):
   except github.GithubException.BadCredentialsException:
      return None, 'Unable to authenticate with provided credentials'
 
-def get_repo(client, repo_name):
-    repo = client.get_repo(repo_name)
-    if repo is None:
-      return None, f'Unable to access repo: {repo_name}'
-    return repo, None
 
-def get_workflow_content_files(repo):
+def get_workflow_content_files(repo: Repository, branch: str) -> [ContentFile]:
   content_files = []
-  contents = repo.get_contents('.github/workflows/')
+  contents = repo.get_contents('.github/workflows/', ref=branch)
   for c in contents:
     if (c.name.endswith('.yml') or c.name.endswith('.yaml')) and c.type == 'file':
       content_files.append(c)
-  return content_files, None
+  return content_files
 
-def update_versions(content_file, library_name, target_version):
-  pass
+def extract_content(content_file: ContentFile) -> dict:
+  #content = content_file.content.encode(UTF8)
+  #if content_file.encoding == BASE64:
+  #  print(f'base64 decoding of content from {content_file.html_url}')
+    # transformers tranforming WIXXWUXXWRRKWUXX noises here...
+  #  content = base64.b64decode(content)
+  return yaml.safe_load(content_file.decoded_content.decode(UTF8))
 
-def branch_stuff():
-    branches = [x.name for x in repo.get_branches()]
-    branch_name = 'testbranch'
-    if 'targetbranch' in branches:
-      return True, f'targetbranch already exists in repo: {repo.name}'
-    print(f'branches: {branches}')
-    # get the main/master branch, will need ref for creating branch from
-    primary_branch = set(['main', 'master']).intersection(set(branches))
-    print(f'primary_branch: {primary_branch}')
-    return False, None
+def update_content(repo: Repository, content_file: ContentFile, content: str) -> ContentFile:
+  content = yaml.dump(content)
+  if content_file.encoding == BASE64:
+    content = base64.b64encode(content.encode(UTF8))
+  print(f'CONTENT_FILE: {content_file}')
+  content_file.content = content
+  return content_file
 
-def main(env_token, repos=['corey-d/workflowtest']):
+# dictionaries are passed by reference
+def update_target_version(content: dict, target_version: str):
+  target_lib, _ = target_version.split('@')
+  for job in content['jobs']:
+    library = content['jobs'][job].get('uses', None)
+    if library is None:
+      continue
+    print(f'uses: {library}')
+    lib, _ = library.split('@')
+    if lib == target_lib:
+      content['jobs'][job]['uses'] = target_version
+
+def main(env_token: str, repos: [str], target_libraries: [str]):
+  if len(target_libraries) == 0:
+    sys.stderr.write('No 3rd party actions provided. Exiting.')
+    exit(1)
   token = os.getenv(env_token)
   if token is None:
     sys.stderr.write(f'Empty environment variable: {env_token}\n')
@@ -48,40 +74,90 @@ def main(env_token, repos=['corey-d/workflowtest']):
   if client is None:
     sys.stderr.write(f'Error instantiating github client: {err_msg}\n')
     exit(1)
+  # fail-log auditing array to report out after the run
   failed_repos = []
+  # iterate over all the repos and update as needed
   for repo_name in repos:
     print(f'Starting processing on repo: {repo_name}')
-    repo, err_msg = get_repo(client, repo_name)
+    repo = client.get_repo(repo_name)
     if repo is None:
       sys.stderr.write(f'Error processing {repo_name}: {err_msg}\n')
       failed_repos.append(repo_name)
       continue
-    workflow_content_files, err_msg = get_workflow_content_files(repo)
+
+    # check if the new branch needs to be made or not
+    if 'update' not in [branch.name for branch in repo.get_branches()]:
+      repo.create_git_ref(ref='refs/heads/update', sha=repo.get_branch(repo.default_branch).commit.sha)
+
+    # the content files need to be grabbed referenced from the newly created branch
+    workflow_content_files = get_workflow_content_files(repo, 'update')
+    if not len(workflow_content_files):
+      # this should probably be checked _before_ creating the branch
+      print(f'no workflow files in repo: {repo.name}')
+      continue
+
+    # iterate through each found workflow file
     for content_file in workflow_content_files:
-      print(f'processing content file: {content_file}')
-      update_versions(content_file, library_name, target_version)
+      print(f'processing workflow file: {content_file.name}')
+      # FYI: content is stored base64 encoded, get the raw text
+      content = yaml.safe_load(content_file.decoded_content.decode()) #extract_content(content_file)
+      # stash the original content to see if there were any changes
+      reference_content = copy.deepcopy(content)
+      # it _might_ be worth having update_target_version take a list of targets
+      # but that's for another day
+      for target in target_libraries:
+        print(f'working on target: {target}')
+        update_target_version(content, target)
 
-    #try:
-    ##  branch = repo.get_branch(branch_name)
-    #  print(branch)
-    #except github.GithubException.GithubException:
+      if reference_content == content:
+        print(f'No changes made to workflow file: {content_file.name}')
+        continue
 
-    #if branch is None:
-    #  branch = repo.create_git_ref(branch_name)
-    #contents = repo.get_contents('README.md', ref)
-
-    #repo.update_file(path=contents.path, message='updating', content='This is a test', sha=contents.sha, branch=ref)
+      content = yaml.dump(content)
+      repo.update_file(path=content_file.path, content=content, sha=content_file.sha, branch='update', message=f'updating 3rd party actions')
+      #commit_changes()
+      print(f'content: {content}')
 
 
 if __name__ == '__main__':
   import argparse
+
+  # very basic validation of 3rd party library declarations
+  def validate_target(target):
+    if len(target.split('@')) != 2:
+      raise argparse.ArgumentTypeError('must be in the form of `action-path@version`')
+    return target
+
+  def process_batch_file(filename: str) -> [list, list]:
+    return ['a'],['b']
+
+
   parser = argparse.ArgumentParser(description='Update workflow 3rd party actions to specific version',
                                   epilog='㋡ Have a nice day! ㋡')
-  parser.add_argument('-e', '--env-token', default='GITHUB_TOKEN', help='Environment variable name that has the GITHUB authentication token')
-  parser.add_argument('-r', '--repo', default='corey-d/workflowtest', help='name of repo to process')
+  # arguments common to all sub commands
   parser.add_argument('--debug', action='store_true', help='enable github library built-in debug logging. SPAMMY.')
+  parser.add_argument('-e', '--env-token', default='GITHUB_TOKEN', help='Environment variable name that has the GITHUB authentication token')
+  parser.add_argument('--bail', action='store_true')
+  # we will split the arguments into two groups using subcommands
+  sub_parser = parser.add_subparsers(help='commands')
 
+  # manual mode for entering options on the command line, useful for a small set of repos
+  manual = sub_parser.add_parser('manual', help='enter all options on the command line')
+  manual.add_argument('repo', action='append')
+  manual.add_argument('target', action='append', type=validate_target)
+  manual.add_argument('-r', '--repo', action='append', dest='repo', help='additional repositories to process')
+  manual.add_argument('-t', '--target', action='append', dest='target', type=validate_target)
+
+  # batch will read a CSV of options, useful for larger groups of processing
+  batch = sub_parser.add_parser('batch', help='read options in from csv file')
+  batch.add_argument('filename', help='filename that has options in repo,action-name@version format')
   args = parser.parse_args()
+
   if args.debug:
     github.enable_console_debug_logging()
-  main(args.env_token, [args.repo])
+  if hasattr(args, 'filename'):
+    args.repo, args.target = process_batch_file(args.filename)
+  print(args)
+  if args.bail:
+    exit(0)
+  main(args.env_token, args.repo, args.target)
