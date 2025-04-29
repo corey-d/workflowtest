@@ -1,11 +1,9 @@
 import base64
-import copy
 import github
+import hashlib
 import os
 import re
 import sys
-import typing
-import yaml
 
 # type aliases for PEP-484 Type Hints
 Branch = github.Branch
@@ -40,10 +38,9 @@ def extract_content(content_file: ContentFile) -> dict:
   #  print(f'base64 decoding of content from {content_file.html_url}')
     # transformers tranforming WIXXWUXXWRRKWUXX noises here...
   #  content = base64.b64decode(content)
-  return yaml.safe_load(content_file.decoded_content.decode(UTF8))
+  return content_file.decoded_content.decode(UTF8)
 
 def update_content(repo: Repository, content_file: ContentFile, content: str) -> ContentFile:
-  content = yaml.dump(content)
   if content_file.encoding == BASE64:
     content = base64.b64encode(content.encode(UTF8))
   print(f'CONTENT_FILE: {content_file}')
@@ -51,16 +48,17 @@ def update_content(repo: Repository, content_file: ContentFile, content: str) ->
   return content_file
 
 # dictionaries are passed by reference
-def update_target_version(content: dict, target_version: str):
-  target_lib, _ = target_version.split('@')
-  for job in content['jobs']:
-    library = content['jobs'][job].get('uses', None)
-    if library is None:
-      continue
-    print(f'uses: {library}')
-    lib, _ = library.split('@')
-    if lib == target_lib:
-      content['jobs'][job]['uses'] = target_version
+def update_target_version(content: str, target_version: str):
+  action_name, _ = target_version.split('@')
+  regex = re.compile(rf'(uses:\s*)({action_name}@[a-zA-Z0-9_\-\.]+)(.*)')
+  def matcher(match):
+    return f'{match.group(1)}{target_version}{match.group(3)}'
+  return regex.sub(matcher, content)
+
+def md5sum(data: str) -> str:
+  md5 = hashlib.md5()
+  md5.update(data.encode())
+  return md5.hexdigest()
 
 def main(env_token: str, repos: [str], target_libraries: [str]):
   if len(target_libraries) == 0:
@@ -100,20 +98,21 @@ def main(env_token: str, repos: [str], target_libraries: [str]):
     for content_file in workflow_content_files:
       print(f'processing workflow file: {content_file.name}')
       # FYI: content is stored base64 encoded, get the raw text
-      content = yaml.safe_load(content_file.decoded_content.decode()) #extract_content(content_file)
-      # stash the original content to see if there were any changes
-      reference_content = copy.deepcopy(content)
+      content = content_file.decoded_content.decode() #extract_content(content_file)
+      # store the hash of the original content to see if there were any changes later
+      content_hash = md5sum(content)
+
       # it _might_ be worth having update_target_version take a list of targets
       # but that's for another day
       for target in target_libraries:
         print(f'working on target: {target}')
-        update_target_version(content, target)
+        content = update_target_version(content, target)
 
-      if reference_content == content:
+
+      if content_hash == md5sum(content):
         print(f'No changes made to workflow file: {content_file.name}')
         continue
 
-      content = yaml.dump(content)
       repo.update_file(path=content_file.path, content=content, sha=content_file.sha, branch='update', message=f'updating 3rd party actions')
       #commit_changes()
       print(f'content: {content}')
